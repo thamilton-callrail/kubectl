@@ -1,0 +1,261 @@
+#!/bin/bash
+set -e
+
+# Ensure Helm is installed
+ensure_helm() {
+	if ! command -v helm >/dev/null 2>&1; then
+		echo "Helm is required but not installed. Please install Helm and try again."
+		exit 1
+	fi
+}
+
+# Ensure ArgoCD CLI is installed
+ensure_argocd_cli() {
+	if ! command -v argocd >/dev/null 2>&1; then
+		echo "ArgoCD CLI is required but not installed. Please install the argocd CLI and try again."
+		exit 1
+	fi
+}
+
+# Ensure the argocd namespace exists
+ensure_ns() {
+	if ! kubectl get ns argocd >/dev/null 2>&1; then
+		kubectl create ns argocd
+	fi
+}
+
+PLUGIN_NAME="kubectl-argocd"
+
+usage() {
+	echo "Usage: kubectl argocd <command>"
+	echo "  bootstrap <app-name> <repo-url> <path> <dest-server> <dest-namespace>"
+	case "$1" in
+		install|upgrade|delete|get|list|bootstrap)
+	   bootstrap)
+		   SUBCOMMAND="$2"; shift 2
+		   case "$SUBCOMMAND" in
+			   create)
+				   if [[ $# -ne 5 ]]; then
+					   echo "Usage: kubectl argocd bootstrap create <app-name> <repo-url> <path> <dest-server> <dest-namespace>"
+					   exit 1
+				   fi
+				   ensure_argocd_cli
+				   ensure_ns
+				   argocd app create "$1" \
+					   --repo "$2" \
+					   --path "$3" \
+					   --dest-server "$4" \
+					   --dest-namespace "$5"
+				   ;;
+			   get)
+				   if [[ $# -ne 1 ]]; then
+					   echo "Usage: kubectl argocd bootstrap get <app-name>"
+					   exit 1
+				   fi
+				   ensure_argocd_cli
+				   argocd app get "$1"
+				   ;;
+			   delete)
+				   if [[ $# -ne 1 ]]; then
+					   echo "Usage: kubectl argocd bootstrap delete <app-name>"
+					   exit 1
+				   fi
+				   ensure_argocd_cli
+				   argocd app delete "$1" --yes
+				   ;;
+			   list)
+				   ensure_argocd_cli
+				   argocd app list
+				   ;;
+			   *)
+				   echo "Unknown bootstrap subcommand: $SUBCOMMAND"
+				   exit 1
+				   ;;
+		   esac
+		   ;;
+			# ...existing code for install, upgrade, delete, get, list...
+			COMMAND="$1"
+			shift
+			case "$COMMAND" in
+				install)
+					ensure_helm
+					ensure_argocd_cli
+					ensure_ns
+					helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
+					helm repo update >/dev/null 2>&1
+					helm upgrade --install argocd argo/argo-cd --namespace argocd --wait
+					echo "ArgoCD has been installed to your kind cluster."
+					echo "To access the ArgoCD API server, run:"
+					echo "  kubectl port-forward svc/argocd-server -n argocd 8080:443"
+					echo "Then visit: https://localhost:8080"
+					;;
+				upgrade)
+					ensure_helm
+					ensure_argocd_cli
+					ensure_ns
+					helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
+					helm repo update >/dev/null 2>&1
+					helm upgrade argocd argo/argo-cd --namespace argocd --wait
+					echo "ArgoCD has been upgraded in your kind cluster."
+					;;
+				delete)
+					ensure_helm
+					helm uninstall argocd --namespace argocd || true
+					kubectl delete ns argocd --ignore-not-found
+					echo "ArgoCD has been uninstalled from your kind cluster."
+					;;
+				get)
+					ensure_helm
+					helm status argocd --namespace argocd
+					;;
+				list)
+					ensure_helm
+					helm list --namespace argocd
+					;;
+			esac
+			;;
+		repository)
+			SUBCOMMAND="$2"; shift 2
+			case "$SUBCOMMAND" in
+				add)
+					# Usage: repository add <repo-url> <type> [username] [password]
+					if [[ $# -lt 2 ]]; then
+						echo "Usage: kubectl argocd repository add <repo-url> <type> [username] [password]"
+						exit 1
+					fi
+					ARGS=("$1" --type "$2")
+					if [[ -n "$3" ]]; then
+						ARGS+=(--username "$3")
+					fi
+					if [[ -n "$4" ]]; then
+						ARGS+=(--password "$4")
+					fi
+					argocd repo add "${ARGS[@]}"
+					;;
+				get)
+					if [[ $# -ne 1 ]]; then
+						echo "Usage: kubectl argocd repository get <repo-url>"
+						exit 1
+					fi
+					argocd repo get "$1"
+					;;
+				delete)
+					if [[ $# -ne 1 ]]; then
+						echo "Usage: kubectl argocd repository delete <repo-url>"
+						exit 1
+					fi
+					argocd repo rm "$1"
+					;;
+				list)
+					argocd repo list
+					;;
+				*)
+					echo "Unknown repository subcommand: $SUBCOMMAND"
+					exit 1
+					;;
+			esac
+			;;
+		project)
+			SUBCOMMAND="$2"; shift 2
+			case "$SUBCOMMAND" in
+				create)
+					if [[ $# -ne 2 ]]; then
+						echo "Usage: kubectl argocd project create <project-name> <description>"
+						exit 1
+					fi
+					argocd proj create "$1" --description "$2"
+					;;
+				get)
+					if [[ $# -ne 1 ]]; then
+						echo "Usage: kubectl argocd project get <project-name>"
+						exit 1
+					fi
+					argocd proj get "$1"
+					;;
+				delete)
+					if [[ $# -ne 1 ]]; then
+						echo "Usage: kubectl argocd project delete <project-name>"
+						exit 1
+					fi
+					argocd proj delete "$1" --yes
+					;;
+				list)
+					argocd proj list
+					;;
+				*)
+					echo "Unknown project subcommand: $SUBCOMMAND"
+					exit 1
+					;;
+			esac
+			;;
+		application)
+			SUBCOMMAND="$2"; shift 2
+			case "$SUBCOMMAND" in
+				create)
+					if [[ $# -ne 5 ]]; then
+						echo "Usage: kubectl argocd application create <app-name> <repo-url> <path> <dest-server> <dest-namespace>"
+						exit 1
+					fi
+					argocd app create "$1" \
+						--repo "$2" \
+						--path "$3" \
+						--dest-server "$4" \
+						--dest-namespace "$5"
+					;;
+				get)
+					if [[ $# -ne 1 ]]; then
+						echo "Usage: kubectl argocd application get <app-name>"
+						exit 1
+					fi
+					argocd app get "$1"
+					;;
+				delete)
+					if [[ $# -ne 1 ]]; then
+						echo "Usage: kubectl argocd application delete <app-name>"
+						exit 1
+					fi
+					argocd app delete "$1" --yes
+					;;
+				list)
+					argocd app list
+					;;
+				*)
+					echo "Unknown application subcommand: $SUBCOMMAND"
+					exit 1
+					;;
+			esac
+			;;
+		*)
+			usage
+			;;
+		echo "To access the ArgoCD API server, run:"
+		echo "  kubectl port-forward svc/argocd-server -n argocd 8080:443"
+		echo "Then visit: https://localhost:8080"
+		;;
+	upgrade)
+		ensure_helm
+		ensure_argocd_cli
+		ensure_ns
+		helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
+		helm repo update >/dev/null 2>&1
+		helm upgrade argocd argo/argo-cd --namespace argocd --wait
+		echo "ArgoCD has been upgraded in your kind cluster."
+		;;
+	delete)
+		ensure_helm
+		helm uninstall argocd --namespace argocd || true
+		kubectl delete ns argocd --ignore-not-found
+		echo "ArgoCD has been uninstalled from your kind cluster."
+		;;
+	get)
+		ensure_helm
+		helm status argocd --namespace argocd
+		;;
+	list)
+		ensure_helm
+		helm list --namespace argocd
+		;;
+	*)
+		usage
+		;;
+esac

@@ -1,0 +1,116 @@
+#!/bin/bash
+set -e
+
+# kubectl plugin standard: https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/
+PLUGIN_NAME="kubectl-cluster"
+
+usage() {
+  echo "Usage: kubectl cluster <command> [<cluster-name>]"
+  echo "Commands:"
+  echo "  create <cluster-name>   Create a kind cluster"
+  echo "  delete <cluster-name>   Delete a kind cluster"
+  echo "  get <cluster-name>      Get info about a kind cluster"
+  echo "  list                    List all kind clusters"
+  exit 1
+}
+
+if [[ "$1" == "--help" || "$1" == "help" || -z "$1" ]]; then
+  usage
+fi
+
+COMMAND="$1"
+CLUSTER_NAME="$2"
+
+case "$COMMAND" in
+  create)
+    if [[ -z "$CLUSTER_NAME" ]]; then
+      usage
+    fi
+    if kind get clusters | grep -qw "$CLUSTER_NAME"; then
+      echo "cluster.cluster.k8s.io/$CLUSTER_NAME already exists"
+      exit 0
+    fi
+    kind create cluster --name "$CLUSTER_NAME" >/dev/null 2>&1 && \
+      echo "cluster.cluster.k8s.io/$CLUSTER_NAME created" || \
+      echo "Failed to create cluster $CLUSTER_NAME" >&2
+    ;;
+  delete)
+    if [[ -z "$CLUSTER_NAME" ]]; then
+      usage
+    fi
+    if kind get clusters | grep -qw "$CLUSTER_NAME"; then
+      kind delete cluster --name "$CLUSTER_NAME" >/dev/null 2>&1 && \
+        echo "cluster.cluster.k8s.io/$CLUSTER_NAME deleted" || \
+        echo "Failed to delete cluster $CLUSTER_NAME" >&2
+    else
+      echo "cluster.cluster.k8s.io/$CLUSTER_NAME not found"
+    fi
+    ;;
+  get)
+    if [[ -z "$CLUSTER_NAME" ]]; then
+      usage
+    fi
+    if kind get clusters | grep -qw "$CLUSTER_NAME"; then
+      CONTEXT="kind-$CLUSTER_NAME"
+      STATUS="Running"
+      CURRENT=$(kubectl config current-context 2>/dev/null)
+      if [[ "$CURRENT" == "$CONTEXT" ]]; then
+        ACTIVE="*"
+      else
+        ACTIVE=" "
+      fi
+      printf "NAME\tSTATUS\tACTIVE\tCONTEXT\n"
+      printf "%s\t%s\t%s\t%s\n" "$CLUSTER_NAME" "$STATUS" "$ACTIVE" "$CONTEXT"
+    else
+      echo "cluster.cluster.k8s.io/$CLUSTER_NAME not found"
+    fi
+    ;;
+  list)
+    CLUSTERS=$(kind get clusters)
+    if [[ -z "$CLUSTERS" ]]; then
+      printf "No resources found.\n"
+    else
+      printf "NAME\tSTATUS\tREADY\tAGE\tCONTEXT\n"
+      for c in $CLUSTERS; do
+        CONTEXT="kind-$c"
+        # Get the Docker container ID for the control plane
+        CONTAINER_ID=$(docker ps --filter "name=kind-$c-control-plane" --format "{{.ID}}")
+        if [[ -n "$CONTAINER_ID" ]]; then
+          STATUS="Running"
+          READY="1/1"
+          # Get AGE from container CreatedAt
+          CREATED=$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER_ID" 2>/dev/null)
+          if [[ -n "$CREATED" ]]; then
+            # Convert to seconds ago
+            AGE=$(date -u -j -f "%Y-%m-%dT%H:%M:%S.%NZ" "${CREATED:0:20}Z" +%s 2>/dev/null)
+            NOW=$(date -u +%s)
+            if [[ -n "$AGE" ]]; then
+              SECS=$((NOW - AGE))
+              if (( SECS < 60 )); then
+                AGE_STR="${SECS}s"
+              elif (( SECS < 3600 )); then
+                AGE_STR="$((SECS/60))m"
+              elif (( SECS < 86400 )); then
+                AGE_STR="$((SECS/3600))h"
+              else
+                AGE_STR="$((SECS/86400))d"
+              fi
+            else
+              AGE_STR="<unknown>"
+            fi
+          else
+            AGE_STR="<unknown>"
+          fi
+        else
+          STATUS="NotReady"
+          READY="0/1"
+          AGE_STR="<unknown>"
+        fi
+        printf "%s\t%s\t%s\t%s\t%s\n" "$c" "$STATUS" "$READY" "$AGE_STR" "$CONTEXT"
+      done
+    fi
+    ;;
+  *)
+    usage
+    ;;
+esac

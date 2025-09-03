@@ -1,0 +1,114 @@
+#!/bin/bash
+set -e
+
+SPEC_DIR="$(pwd)/.openapi"
+SPEC_FILE="$SPEC_DIR/openapi.yaml"
+SPEC_URL="https://petstore3.swagger.io/api/v3/openapi.yaml"
+
+usage() {
+  echo "Usage: kubectl openapi <install|get|delete|update|path|generate>"
+  echo "Commands:"
+  echo "  install           Download and store the OpenAPI spec"
+  echo "  get               Output the current OpenAPI spec"
+  echo "  delete            Remove the local OpenAPI spec"
+  echo "  update            Refresh the spec from the public source"
+  echo "  path              Show the local spec file path"
+  echo "  generate <lang> <output-dir> [--additional-properties key=value,...]"
+  echo "                     Generate client/server code for a language using openapi-generator"
+  echo "                     Example: kubectl openapi generate python ./client"
+  exit 1
+}
+
+if [[ "$1" == "--help" || "$1" == "help" || -z "$1" ]]; then
+  usage
+fi
+
+mkdir -p "$SPEC_DIR"
+
+case "$1" in
+  install)
+    if [[ -f "$SPEC_FILE" ]]; then
+      echo "OpenAPI spec already installed at $SPEC_FILE"
+      exit 0
+    fi
+    if command -v curl >/dev/null 2>&1; then
+      curl -sSL "$SPEC_URL" -o "$SPEC_FILE"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$SPEC_FILE" "$SPEC_URL"
+    else
+      echo "Error: curl or wget is required to fetch the OpenAPI spec." >&2
+      exit 1
+    fi
+    echo "OpenAPI specification installed at $SPEC_FILE"
+    ;;
+  get)
+    if [[ -f "$SPEC_FILE" ]]; then
+      cat "$SPEC_FILE"
+    else
+      echo "No OpenAPI spec installed. Run: kubectl openapi install" >&2
+      exit 1
+    fi
+    ;;
+  delete)
+    if [[ -f "$SPEC_FILE" ]]; then
+      rm "$SPEC_FILE"
+      echo "OpenAPI specification deleted from $SPEC_FILE"
+    else
+      echo "No OpenAPI spec installed. Nothing to delete."
+    fi
+    ;;
+  update)
+    if command -v curl >/dev/null 2>&1; then
+      curl -sSL "$SPEC_URL" -o "$SPEC_FILE"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$SPEC_FILE" "$SPEC_URL"
+    else
+      echo "Error: curl or wget is required to fetch the OpenAPI spec." >&2
+      exit 1
+    fi
+    echo "OpenAPI specification updated at $SPEC_FILE"
+    ;;
+  path)
+    if [[ -f "$SPEC_FILE" ]]; then
+      echo "$SPEC_FILE"
+    else
+      echo "No OpenAPI spec installed. Run: kubectl openapi install" >&2
+      exit 1
+    fi
+    ;;
+  generate)
+    # Usage: generate <lang> <output-dir> [--additional-properties key=value,...]
+    if [[ $# -lt 3 ]]; then
+      echo "Usage: kubectl openapi generate <lang> <output-dir> [--additional-properties key=value,...]"
+      exit 1
+    fi
+    shift # remove 'generate'
+    LANG="$1"
+    OUTDIR="$2"
+    shift 2
+    if ! command -v openapi-generator >/dev/null 2>&1; then
+      echo "Error: openapi-generator CLI is required for code generation. See https://openapi-generator.tech/docs/installation" >&2
+      exit 1
+    fi
+    if [[ ! -f "$SPEC_FILE" ]]; then
+      echo "No OpenAPI spec installed. Run: kubectl openapi install" >&2
+      exit 1
+    fi
+    ADDITIONAL=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == --additional-properties ]]; then
+        shift
+        ADDITIONAL="--additional-properties $1"
+        shift
+      else
+        echo "Unknown option: $1"
+        exit 1
+      fi
+    done
+    openapi-generator generate -i "$SPEC_FILE" -g "$LANG" -o "$OUTDIR" $ADDITIONAL
+    echo "Code generated in $OUTDIR for language $LANG."
+    ;;
+  *)
+    usage
+    ;;
+esac
